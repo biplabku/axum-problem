@@ -136,7 +136,7 @@ async fn large_enum_all_variants_correct() {
 
 #[tokio::test]
 async fn concurrent_into_response_is_safe() {
-    use std::sync::Arc;
+    
 
     #[derive(Debug, Error, AxumProblem, Clone)]
     enum ConcurrentError {
@@ -220,7 +220,7 @@ async fn problem_without_detail_is_valid_rfc9457() {
 
 #[tokio::test]
 async fn implements_multiple_traits_simultaneously() {
-    use std::fmt;
+    
 
     #[derive(Debug, Error, AxumProblem, Clone, PartialEq)]
     enum MultiTraitError {

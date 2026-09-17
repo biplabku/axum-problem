@@ -1,6 +1,6 @@
 use axum::body::to_bytes;
 use axum::response::IntoResponse;
-use axum_problem::{AxumProblem, Problem};
+use axum_problem::AxumProblem;
 use http::StatusCode;
 use thiserror::Error;
 

@@ -103,7 +103,6 @@ fn expand_derive(input: ProblemInput) -> proc_macro2::TokenStream {
 }
 
 fn build_match_arm(variant: &ProblemVariant, enum_ident: &syn::Ident) -> proc_macro2::TokenStream {
-    let v_ident = &variant.ident;
     let status = variant.status;
     let mask = variant.mask;
 
