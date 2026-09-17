@@ -127,7 +127,13 @@ impl IntoResponse for Problem {
         let status = StatusCode::from_u16(self.status)
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
-        let body = serde_json::to_string(&self)
+        // Sync the JSON `status` field with the actual HTTP status line.
+        // If the caller passed an invalid code (e.g. 0), both the HTTP status
+        // and the JSON body must agree — returning 500 in both.
+        let mut serializable = self;
+        serializable.status = status.as_u16();
+
+        let body = serde_json::to_string(&serializable)
             .unwrap_or_else(|_| r#"{"title":"Internal Server Error","status":500}"#.to_owned());
 
         (
