@@ -1,0 +1,19 @@
+[package]
+name = "axum-problem-derive"
+description = "Derive macro for axum-problem — #[derive(AxumProblem)] for RFC 9457 error responses"
+keywords = ["axum", "error", "http", "rfc9457", "problem-details"]
+categories = ["web-programming", "rust-patterns"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+darling = "0.20"
