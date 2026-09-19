@@ -478,3 +478,88 @@ async fn problem_layer_stacked_twice_is_idempotent() {
         "application/problem+json"
     );
 }
+
+// ── Extension field edge cases ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn extension_key_shadows_standard_field_title() {
+    // RFC 9457 §3.5: extension members should not conflict with standard members.
+    // We don't enforce this — but the behavior must be defined and not panic.
+    // serde flatten: the standard "title" field wins (struct fields take precedence).
+    let p = Problem::new(400)
+        .extension("title", serde_json::json!("injected title"));
+
+    let resp = p.into_response();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    // Must be valid JSON — must not panic or produce invalid output
+    let json: serde_json::Value = serde_json::from_str(&body)
+        .expect("response must be valid JSON even when extension key conflicts with standard field");
+    // The status field must always be correct
+    assert_eq!(json["status"], 400);
+}
+
+#[tokio::test]
+async fn extension_with_nested_object() {
+    let p = Problem::new(422)
+        .extension("context", serde_json::json!({
+            "user_id": "u123",
+            "action": "create_order",
+            "errors": [{"field": "amount", "code": "negative"}]
+        }));
+
+    let resp = p.into_response();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(json["context"]["user_id"], "u123");
+    assert_eq!(json["context"]["errors"][0]["code"], "negative");
+    assert_eq!(json["status"], 422);
+}
+
+#[tokio::test]
+async fn extension_with_null_value() {
+    let p = Problem::new(400)
+        .extension("trace_id", serde_json::Value::Null);
+
+    let resp = p.into_response();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["trace_id"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn problem_layer_preserves_extensions_on_passthrough() {
+    use axum::{Router, routing::get, body::Body};
+    use axum_problem::ProblemLayer;
+    use tower::ServiceExt;
+
+    async fn handler_with_extension() -> impl axum::response::IntoResponse {
+        Problem::new(422)
+            .detail("failed")
+            .extension("violations", serde_json::json!([{"field": "x"}]))
+    }
+
+    let app = Router::new()
+        .route("/err", get(handler_with_extension))
+        .layer(ProblemLayer);
+
+    let resp = app
+        .oneshot(
+            http::Request::builder()
+                .uri("/err")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    // ProblemLayer must pass through already-problem responses unchanged,
+    // including their extension fields
+    assert_eq!(json["violations"][0]["field"], "x",
+        "ProblemLayer must not strip extension fields from problem responses");
+    assert_eq!(json["status"], 422);
+}

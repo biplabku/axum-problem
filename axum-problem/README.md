@@ -123,6 +123,7 @@ For one-off errors where a full enum is overkill:
 
 ```rust
 use axum_problem::Problem;
+use serde_json::json;
 
 async fn handler() -> impl IntoResponse {
     Problem::not_found()
@@ -134,6 +135,55 @@ async fn handler() -> impl IntoResponse {
 Convenience constructors: `bad_request()`, `unauthorized()`, `forbidden()`,
 `not_found()`, `conflict()`, `unprocessable_entity()`, `too_many_requests()`,
 `internal_server_error()`, `service_unavailable()`.
+
+### RFC 9457 extension members
+
+Add arbitrary top-level fields alongside the standard ones:
+
+```rust
+Problem::new(422)
+    .detail("Validation failed")
+    .extension("violations", json!([
+        {"field": "email", "message": "must be a valid email address"},
+        {"field": "age",   "message": "must be at least 18"},
+    ]))
+    .extension("request_id", json!("req-abc-123"))
+```
+
+Produces:
+```json
+{
+  "title": "Unprocessable Entity",
+  "status": 422,
+  "detail": "Validation failed",
+  "violations": [...],
+  "request_id": "req-abc-123"
+}
+```
+
+Extension fields are serialized flat at the top level — not nested under an
+`"extensions"` key — as RFC 9457 §3.5 requires.
+
+---
+
+## ProblemLayer — catch axum's own errors
+
+axum's built-in extractors (bad JSON body, wrong Content-Type, missing fields)
+return plain text errors, not `application/problem+json`. `ProblemLayer` fixes
+this by intercepting any 4xx/5xx response that isn't already a problem response:
+
+```rust
+use axum::Router;
+use axum_problem::ProblemLayer;
+
+let app = Router::new()
+    /* ... your routes ... */
+    .layer(ProblemLayer);
+```
+
+Now every error — including axum extractor failures — returns structured
+`application/problem+json`. Responses already in problem+json format pass
+through unchanged (extension fields preserved).
 
 ---
 
