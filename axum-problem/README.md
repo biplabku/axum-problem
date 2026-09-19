@@ -187,6 +187,38 @@ through unchanged (extension fields preserved).
 
 ---
 
+## utoipa / OpenAPI integration
+
+Enable the `utoipa` feature to expose `Problem` in your OpenAPI spec:
+
+```toml
+[dependencies]
+axum-problem = { version = "0.1", features = ["utoipa"] }
+utoipa = "4"
+```
+
+`Problem` implements `ToSchema` — use it directly in `#[utoipa::path]` responses:
+
+```rust
+#[utoipa::path(
+    get, path = "/orders/{id}",
+    responses(
+        (status = 200, body = Order),
+        (status = 404, body = Problem, description = "Order not found"),
+        (status = 422, body = Problem, description = "Validation failed"),
+        (status = 500, body = Problem, description = "Internal error"),
+    )
+)]
+async fn get_order(Path(id): Path<i64>) -> Result<Json<Order>, ApiError> {
+    // ...
+}
+```
+
+The generated schema includes all RFC 9457 standard fields plus
+`additionalProperties: true` to represent extension members.
+
+---
+
 ## Works without thiserror
 
 `AxumProblem` only requires `Display` — you can use it with any error type:

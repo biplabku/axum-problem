@@ -563,3 +563,29 @@ async fn problem_layer_preserves_extensions_on_passthrough() {
         "ProblemLayer must not strip extension fields from problem responses");
     assert_eq!(json["status"], 422);
 }
+
+// ── utoipa schema (only compiled when feature is enabled) ─────────────────────
+
+#[cfg(feature = "utoipa")]
+#[test]
+fn utoipa_schema_contains_required_fields() {
+    use utoipa::ToSchema;
+
+    let (name, schema_ref) = Problem::schema();
+    assert_eq!(name, "Problem");
+
+    // Schema must produce valid JSON
+    let json = serde_json::to_string(&schema_ref).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    // Must have properties for standard RFC 9457 fields
+    let props = &val["properties"];
+    assert!(props.get("title").is_some(), "schema must include 'title'");
+    assert!(props.get("status").is_some(), "schema must include 'status'");
+    assert!(props.get("detail").is_some(), "schema must include 'detail'");
+    assert!(props.get("instance").is_some(), "schema must include 'instance'");
+
+    // Extension members via additionalProperties: true
+    assert!(val.get("additionalProperties").is_some(),
+        "schema must allow extension members via additionalProperties");
+}

@@ -230,6 +230,72 @@ pub fn status_title(status: u16) -> &'static str {
     }
 }
 
+// ── utoipa integration (optional feature) ────────────────────────────────────
+
+#[cfg(feature = "utoipa")]
+mod utoipa_impl {
+    use super::Problem;
+    use utoipa::openapi::{
+        ObjectBuilder, RefOr, Schema,
+        schema::{SchemaType, SchemaFormat, KnownFormat, AdditionalProperties},
+        response::ResponseBuilder,
+        content::ContentBuilder,
+    };
+
+    impl<'__s> utoipa::ToSchema<'__s> for Problem {
+        fn schema() -> (&'__s str, RefOr<Schema>) {
+            (
+                "Problem",
+                RefOr::T(Schema::Object(
+                    ObjectBuilder::new()
+                        .description(Some("RFC 9457 problem details (application/problem+json)"))
+                        .property(
+                            "type",
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::String)
+                                .description(Some("URI reference identifying the problem type"))
+                                .build(),
+                        )
+                        .property(
+                            "title",
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::String)
+                                .description(Some("Short human-readable summary of the problem type"))
+                                .build(),
+                        )
+                        .required("title")
+                        .property(
+                            "status",
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Integer)
+                                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int32)))
+                                .description(Some("HTTP status code"))
+                                .build(),
+                        )
+                        .required("status")
+                        .property(
+                            "detail",
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::String)
+                                .description(Some("Human-readable explanation specific to this occurrence"))
+                                .build(),
+                        )
+                        .property(
+                            "instance",
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::String)
+                                .description(Some("URI identifying the specific occurrence of this problem"))
+                                .build(),
+                        )
+                        // RFC 9457 extension members — any additional top-level fields
+                        .additional_properties(Some(AdditionalProperties::FreeForm(true)))
+                        .build(),
+                )),
+            )
+        }
+    }
+}
+
 // ── ProblemLayer ──────────────────────────────────────────────────────────────
 
 /// Tower middleware layer that converts non-problem error responses to RFC 9457.
