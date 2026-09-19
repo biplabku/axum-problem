@@ -62,15 +62,32 @@ use serde::Serialize;
 /// An RFC 9457 problem details response.
 ///
 /// Serializes to `application/problem+json` with the correct HTTP status code.
+/// Extension members (RFC 9457 §3.5) are serialized as top-level JSON fields
+/// alongside the standard members.
 ///
 /// # Manual construction
 ///
 /// ```rust
 /// use axum_problem::Problem;
+/// use serde_json::json;
 ///
-/// let p = Problem::new(404)
-///     .title("Order Not Found")
-///     .detail("Order 1001 does not exist");
+/// let p = Problem::new(422)
+///     .title("Validation Failed")
+///     .detail("One or more fields are invalid")
+///     .extension("violations", json!([
+///         {"field": "email", "message": "must be a valid email"},
+///         {"field": "age",   "message": "must be at least 18"},
+///     ]));
+/// ```
+///
+/// Produces:
+/// ```json
+/// {
+///   "title": "Validation Failed",
+///   "status": 422,
+///   "detail": "One or more fields are invalid",
+///   "violations": [...]
+/// }
 /// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct Problem {
@@ -91,6 +108,12 @@ pub struct Problem {
     /// URI identifying the specific occurrence of this problem.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
+
+    /// RFC 9457 extension members — serialized as top-level JSON fields.
+    ///
+    /// Use [`Problem::extension`] to add fields fluently.
+    #[serde(flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Problem {
@@ -103,7 +126,23 @@ impl Problem {
             status,
             detail: None,
             instance: None,
+            extensions: serde_json::Map::new(),
         }
+    }
+
+    /// Add an RFC 9457 extension member as a top-level JSON field.
+    ///
+    /// ```rust
+    /// use axum_problem::Problem;
+    /// use serde_json::json;
+    ///
+    /// let p = Problem::new(422)
+    ///     .extension("violations", json!([{"field":"email","message":"invalid"}]))
+    ///     .extension("request_id", json!("req-abc-123"));
+    /// ```
+    pub fn extension(mut self, key: impl Into<String>, value: impl Into<serde_json::Value>) -> Self {
+        self.extensions.insert(key.into(), value.into());
+        self
     }
 
     /// Set the problem type URI (defaults to `"about:blank"` in the response).
@@ -329,6 +368,76 @@ mod tests {
         assert_eq!(status_title(404), "Not Found");
         assert_eq!(status_title(500), "Internal Server Error");
         assert_eq!(status_title(999), "Error");
+    }
+
+    // ── extensions field tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn extension_field_serialized_at_top_level() {
+        let p = Problem::new(422)
+            .detail("validation failed")
+            .extension("violations", serde_json::json!([
+                {"field": "email", "message": "invalid"}
+            ]));
+
+        let resp = p.into_response();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        // Extension must be a TOP-LEVEL field, not nested under "extensions"
+        assert!(json.get("violations").is_some(), "violations must be a top-level field");
+        assert!(json.get("extensions").is_none(), "must not have a nested 'extensions' key");
+        assert_eq!(json["violations"][0]["field"], "email");
+        assert_eq!(json["status"], 422);
+        assert_eq!(json["detail"], "validation failed");
+    }
+
+    #[tokio::test]
+    async fn multiple_extensions_all_at_top_level() {
+        let p = Problem::new(400)
+            .extension("request_id", serde_json::json!("req-abc-123"))
+            .extension("correlation_id", serde_json::json!("corr-xyz"))
+            .extension("retry_after", serde_json::json!(30));
+
+        let resp = p.into_response();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(json["request_id"], "req-abc-123");
+        assert_eq!(json["correlation_id"], "corr-xyz");
+        assert_eq!(json["retry_after"], 30);
+    }
+
+    #[tokio::test]
+    async fn no_extensions_means_no_extra_fields() {
+        let p = Problem::new(404).detail("not found");
+        let resp = p.into_response();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        // Only standard RFC 9457 fields present
+        let keys: Vec<&str> = json.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        for key in &keys {
+            assert!(
+                ["title", "status", "detail", "instance", "type"].contains(key),
+                "unexpected extra key in response: {key}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn extension_is_valid_rfc9457_json() {
+        let p = Problem::new(400)
+            .extension("errors", serde_json::json!({"count": 3}));
+        let resp = p.into_response();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        // Standard fields still present
+        assert!(json["title"].is_string());
+        assert_eq!(json["status"], 400);
+        // Extension present
+        assert_eq!(json["errors"]["count"], 3);
     }
 
     // ── ProblemLayer tests ────────────────────────────────────────────────────
