@@ -4,7 +4,7 @@
 //!
 //! ```rust,no_run
 //! use axum::{Router, routing::get, extract::Path};
-//! use axum_problem::{AxumProblem, Problem};
+//! use axum_problem::{AxumProblem, Problem, ProblemLayer};
 //! use thiserror::Error;
 //!
 //! #[derive(Debug, Error, AxumProblem)]
@@ -25,10 +25,33 @@
 //! async fn get_order(Path(id): Path<i64>) -> Result<String, ApiError> {
 //!     Err(ApiError::NotFound { id })
 //! }
+//!
+//! // Apply ProblemLayer to catch axum's own extractor errors
+//! // (bad JSON body, wrong content-type, etc.) and convert them to RFC 9457.
+//! let app: Router = Router::new()
+//!     .route("/orders/:id", get(get_order))
+//!     .layer(ProblemLayer);
 //! ```
 //!
 //! The `mask` attribute hides the error detail from the HTTP response (preventing
 //! internal details leaking to clients) and logs the full error via `tracing::error!`.
+//!
+//! # ProblemLayer
+//!
+//! [`ProblemLayer`] is a Tower middleware that ensures **every** error response
+//! from your API uses `application/problem+json`. It intercepts any 4xx/5xx
+//! response that isn't already a problem response and wraps it:
+//!
+//! ```rust,no_run
+//! use axum::Router;
+//! use axum_problem::ProblemLayer;
+//!
+//! let app: Router = Router::new()
+//!     /* ... routes ... */
+//!     .layer(ProblemLayer);
+//! ```
+//!
+//! Responses already in `application/problem+json` format pass through unchanged.
 
 pub use axum_problem_derive::AxumProblem;
 
@@ -168,6 +191,89 @@ pub fn status_title(status: u16) -> &'static str {
     }
 }
 
+// ── ProblemLayer ──────────────────────────────────────────────────────────────
+
+/// Tower middleware layer that converts non-problem error responses to RFC 9457.
+///
+/// Any 4xx or 5xx response that doesn't have `Content-Type: application/problem+json`
+/// is replaced with a [`Problem`] response using the same HTTP status code.
+/// 2xx and 3xx responses pass through unchanged.
+/// Responses already in problem+json format also pass through unchanged.
+///
+/// Apply it **last** (outermost layer) in your axum router so it catches errors
+/// from all other middleware and extractors:
+///
+/// ```rust,no_run
+/// use axum::Router;
+/// use axum_problem::ProblemLayer;
+///
+/// let app: Router = Router::new()
+///     /* ... routes and other layers ... */
+///     .layer(ProblemLayer);
+/// ```
+#[derive(Clone, Copy, Default)]
+pub struct ProblemLayer;
+
+impl<S> tower_layer::Layer<S> for ProblemLayer {
+    type Service = ProblemService<S>;
+    fn layer(&self, inner: S) -> Self::Service {
+        ProblemService { inner }
+    }
+}
+
+/// Tower service produced by [`ProblemLayer`].
+#[derive(Clone)]
+pub struct ProblemService<S> {
+    inner: S,
+}
+
+impl<S, ReqBody> tower::Service<http::Request<ReqBody>> for ProblemService<S>
+where
+    S: tower::Service<http::Request<ReqBody>, Response = axum::response::Response>
+        + Clone
+        + Send
+        + 'static,
+    S::Future: Send + 'static,
+    ReqBody: Send + 'static,
+{
+    type Response = axum::response::Response;
+    type Error = S::Error;
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+    >;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
+        use axum::response::IntoResponse;
+        let future = self.inner.call(req);
+        Box::pin(async move {
+            let resp = future.await?;
+            let status = resp.status();
+
+            if status.is_client_error() || status.is_server_error() {
+                let already_problem = resp
+                    .headers()
+                    .get(http::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|ct| ct.contains("application/problem+json"))
+                    .unwrap_or(false);
+
+                if !already_problem {
+                    return Ok(Problem::new(status.as_u16()).into_response());
+                }
+            }
+
+            Ok(resp)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +329,126 @@ mod tests {
         assert_eq!(status_title(404), "Not Found");
         assert_eq!(status_title(500), "Internal Server Error");
         assert_eq!(status_title(999), "Error");
+    }
+
+    // ── ProblemLayer tests ────────────────────────────────────────────────────
+
+    use axum::{Router, routing::get, body::Body};
+    use tower::ServiceExt;
+
+    async fn handler_404() -> impl axum::response::IntoResponse {
+        (http::StatusCode::NOT_FOUND, "plain text 404")
+    }
+
+    async fn handler_200() -> impl axum::response::IntoResponse {
+        "ok"
+    }
+
+    async fn handler_problem() -> impl axum::response::IntoResponse {
+        Problem::not_found().detail("already a problem")
+    }
+
+    fn layered_app() -> Router {
+        Router::new()
+            .route("/notfound", get(handler_404))
+            .route("/ok", get(handler_200))
+            .route("/problem", get(handler_problem))
+            .layer(ProblemLayer)
+    }
+
+    async fn call(app: &Router, uri: &str) -> axum::response::Response {
+        app.clone()
+            .oneshot(
+                http::Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn problem_layer_converts_plain_404_to_problem_json() {
+        let app = layered_app();
+        let resp = call(&app, "/notfound").await;
+
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+
+        let body = body_string(resp).await;
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["status"], 404);
+        assert_eq!(json["title"], "Not Found");
+    }
+
+    #[tokio::test]
+    async fn problem_layer_passes_through_2xx() {
+        let app = layered_app();
+        let resp = call(&app, "/ok").await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        // Content-Type must NOT be problem+json for a 200
+        let ct = resp.headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(!ct.contains("application/problem+json"));
+    }
+
+    #[tokio::test]
+    async fn problem_layer_passes_through_existing_problem_json() {
+        let app = layered_app();
+        let resp = call(&app, "/problem").await;
+
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+
+        // Detail must still be present — not overwritten by the layer
+        let body = body_string(resp).await;
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["detail"], "already a problem");
+    }
+
+    #[tokio::test]
+    async fn problem_layer_converts_axum_json_extractor_error() {
+        // When axum's JSON extractor fails (bad body), it returns 422 with
+        // plain text. ProblemLayer must convert it to problem+json.
+        use axum::extract::Json;
+
+        async fn needs_json(_: Json<serde_json::Value>) -> &'static str { "ok" }
+
+        let app = Router::new()
+            .route("/json", axum::routing::post(needs_json))
+            .layer(ProblemLayer);
+
+        let resp = app
+            .oneshot(
+                http::Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from("not valid json {{"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(resp.status().is_client_error());
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/problem+json",
+            "axum extractor error must be converted to problem+json by ProblemLayer"
+        );
+
+        let body = body_string(resp).await;
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(json["status"].as_u64().unwrap() >= 400);
+        assert!(json["title"].is_string());
     }
 }
