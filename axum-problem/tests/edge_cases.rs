@@ -314,3 +314,167 @@ async fn works_without_thiserror_if_display_implemented() {
     let json = body_json(resp).await;
     assert_eq!(json["detail"], "service is down");
 }
+
+// ── ProblemLayer edge cases ────────────────────────────────────────────────────
+
+use axum::{Router, routing::{get, post}, body::Body};
+use axum_problem::ProblemLayer;
+use tower::ServiceExt;
+
+async fn resp_json(app: Router, method: &str, uri: &str) -> axum::response::Response {
+    app.oneshot(
+        http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+// axum returns a plain 404 for routes that don't exist.
+// ProblemLayer must convert it to problem+json.
+#[tokio::test]
+async fn problem_layer_converts_axum_404_missing_route() {
+    let app = Router::new()
+        .route("/exists", get(|| async { "ok" }))
+        .layer(ProblemLayer);
+
+    let resp = resp_json(app, "GET", "/does-not-exist").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        resp.headers().get(http::header::CONTENT_TYPE).unwrap(),
+        "application/problem+json",
+        "axum's 404 for missing route must become problem+json"
+    );
+    let json = body_json(resp).await;
+    assert_eq!(json["status"], 404);
+}
+
+// axum returns a plain 405 when the route exists but method is wrong.
+// ProblemLayer must convert it.
+#[tokio::test]
+async fn problem_layer_converts_axum_405_method_not_allowed() {
+    let app = Router::new()
+        .route("/hook", post(|| async { "ok" })) // POST only
+        .layer(ProblemLayer);
+
+    let resp = resp_json(app, "GET", "/hook").await; // GET → 405
+    assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        resp.headers().get(http::header::CONTENT_TYPE).unwrap(),
+        "application/problem+json",
+        "axum's 405 Method Not Allowed must become problem+json"
+    );
+    let json = body_json(resp).await;
+    assert_eq!(json["status"], 405);
+    assert_eq!(json["title"], "Method Not Allowed");
+}
+
+// 5xx from a handler that returns an error status code.
+#[tokio::test]
+async fn problem_layer_converts_5xx_to_problem_json() {
+    let app = Router::new()
+        .route("/crash", get(|| async {
+            (StatusCode::INTERNAL_SERVER_ERROR, "something broke")
+        }))
+        .layer(ProblemLayer);
+
+    let resp = resp_json(app, "GET", "/crash").await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        resp.headers().get(http::header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+    let json = body_json(resp).await;
+    assert_eq!(json["status"], 500);
+    assert_eq!(json["title"], "Internal Server Error");
+}
+
+// 3xx redirect responses must pass through unchanged — not converted.
+#[tokio::test]
+async fn problem_layer_passes_through_3xx_redirect() {
+    let app = Router::new()
+        .route("/old", get(|| async {
+            (
+                StatusCode::MOVED_PERMANENTLY,
+                [(http::header::LOCATION, "/new")],
+                "",
+            )
+        }))
+        .layer(ProblemLayer);
+
+    let resp = resp_json(app, "GET", "/old").await;
+    assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+    // Must NOT be problem+json
+    let ct = resp.headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(!ct.contains("application/problem+json"),
+        "3xx redirect must not be converted to problem");
+}
+
+// Response with no Content-Type at all on a 4xx — must be converted.
+#[tokio::test]
+async fn problem_layer_converts_4xx_with_no_content_type() {
+    let app = Router::new()
+        .route("/raw", get(|| async {
+            // Return 400 with no Content-Type header
+            http::Response::builder()
+                .status(400)
+                .body(Body::empty())
+                .unwrap()
+        }))
+        .layer(ProblemLayer);
+
+    let resp = resp_json(app, "GET", "/raw").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        resp.headers().get(http::header::CONTENT_TYPE).unwrap(),
+        "application/problem+json",
+        "4xx with no content-type must be converted"
+    );
+}
+
+// ProblemLayer must not disturb an existing problem+json 500.
+#[tokio::test]
+async fn problem_layer_passes_through_existing_problem_500() {
+    let app = Router::new()
+        .route("/err", get(|| async {
+            Problem::internal_server_error().detail("database unavailable")
+        }))
+        .layer(ProblemLayer);
+
+    let resp = resp_json(app, "GET", "/err").await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json = body_json(resp).await;
+    // Detail must be preserved — not overwritten by the layer
+    assert_eq!(json["detail"], "database unavailable",
+        "existing problem detail must survive ProblemLayer");
+}
+
+// Layer can be stacked multiple times without doubling headers or changing behavior.
+#[tokio::test]
+async fn problem_layer_stacked_twice_is_idempotent() {
+    let app = Router::new()
+        .route("/notfound", get(|| async {
+            StatusCode::NOT_FOUND
+        }))
+        .layer(ProblemLayer)
+        .layer(ProblemLayer); // stacked twice
+
+    let resp = resp_json(app, "GET", "/notfound").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    // Content-Type must appear exactly once
+    let ct_count = resp.headers()
+        .get_all(http::header::CONTENT_TYPE)
+        .iter()
+        .count();
+    assert_eq!(ct_count, 1, "content-type must appear exactly once even with double layer");
+    assert_eq!(
+        resp.headers().get(http::header::CONTENT_TYPE).unwrap(),
+        "application/problem+json"
+    );
+}
