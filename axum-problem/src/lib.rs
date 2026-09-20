@@ -18,8 +18,12 @@
 //!     Unauthorized,
 //!
 //!     #[error("database error: {0}")]
-//!     #[problem(status = 500, mask)]
+//!     #[problem(status = 500, mask)]             // logs at error level (default)
 //!     Database(String),
+//!
+//!     #[error("rate limited: {0}")]
+//!     #[problem(status = 429, mask, log = "warn")]  // logs at warn level
+//!     RateLimited(String),
 //! }
 //!
 //! async fn get_order(Path(id): Path<i64>) -> Result<String, ApiError> {
@@ -302,8 +306,10 @@ mod utoipa_impl {
 ///
 /// Any 4xx or 5xx response that doesn't have `Content-Type: application/problem+json`
 /// is replaced with a [`Problem`] response using the same HTTP status code.
-/// 2xx and 3xx responses pass through unchanged.
-/// Responses already in problem+json format also pass through unchanged.
+/// The original response body (up to 4 KB) is preserved as the problem `detail`
+/// field — so axum extractor error messages like "missing field `email`" are not
+/// silently discarded. 2xx and 3xx responses pass through unchanged. Responses
+/// already in `application/problem+json` format also pass through unchanged.
 ///
 /// Apply it **last** (outermost layer) in your axum router so it catches errors
 /// from all other middleware and extractors:
@@ -370,7 +376,25 @@ where
                     .unwrap_or(false);
 
                 if !already_problem {
-                    return Ok(Problem::new(status.as_u16()).into_response());
+                    let status_u16 = status.as_u16();
+                    // Collect the original error body (capped at 4 KB) and use it
+                    // as the problem detail. This preserves axum extractor error
+                    // messages (e.g. "missing field `email`") rather than discarding
+                    // them. Bodies larger than 4 KB or unreadable bodies fall back
+                    // to no detail — the problem response is always emitted.
+                    let body_bytes = axum::body::to_bytes(resp.into_body(), 4096)
+                        .await
+                        .unwrap_or_default();
+                    let detail = std::str::from_utf8(&body_bytes)
+                        .map(|s| s.trim())
+                        .unwrap_or("")
+                        .to_owned();
+                    let problem = if detail.is_empty() {
+                        Problem::new(status_u16)
+                    } else {
+                        Problem::new(status_u16).detail(detail)
+                    };
+                    return Ok(problem.into_response());
                 }
             }
 
@@ -558,6 +582,26 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(json["status"], 404);
         assert_eq!(json["title"], "Not Found");
+        // The original handler body ("plain text 404") is now preserved as detail.
+        assert_eq!(json["detail"], "plain text 404");
+    }
+
+    #[tokio::test]
+    async fn problem_layer_preserves_empty_body_without_detail() {
+        async fn handler_empty_404() -> impl axum::response::IntoResponse {
+            http::StatusCode::NOT_FOUND
+        }
+
+        let app = Router::new()
+            .route("/empty", get(handler_empty_404))
+            .layer(ProblemLayer);
+
+        let resp = call(&app, "/empty").await;
+        let body = body_string(resp).await;
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["status"], 404);
+        // No detail field when original body is empty.
+        assert!(json.get("detail").is_none(), "empty body must not produce a detail field");
     }
 
     #[tokio::test]

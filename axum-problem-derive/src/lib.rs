@@ -14,8 +14,11 @@ use syn::{parse_macro_input, DeriveInput};
 /// - `title = "<str>"` — Optional. Defaults to the standard title for the
 ///   status code (e.g. 404 → "Not Found").
 /// - `mask` — Optional. Hides the error detail from the HTTP response and
-///   logs it via `tracing::error!` instead. Use for 5xx errors where you
-///   don't want internal details leaking to clients.
+///   logs it instead. Use for 5xx errors where you don't want internal
+///   details leaking to clients.
+/// - `log = "<level>"` — Optional, only relevant when `mask` is set.
+///   Controls the tracing level used to log the masked error. One of
+///   `"error"` (default), `"warn"`, `"info"`, or `"debug"`.
 ///
 /// # Example
 ///
@@ -34,8 +37,12 @@ use syn::{parse_macro_input, DeriveInput};
 ///     Unauthorized,
 ///
 ///     #[error("db error: {0}")]
-///     #[problem(status = 500, mask)]
+///     #[problem(status = 500, mask)]          // logs at error level (default)
 ///     Database(String),
+///
+///     #[error("rate limited: {0}")]
+///     #[problem(status = 429, mask, log = "warn")]  // logs at warn level
+///     RateLimited(String),
 /// }
 /// ```
 #[proc_macro_derive(AxumProblem, attributes(problem))]
@@ -75,6 +82,11 @@ struct ProblemVariant {
     /// Prevents internal details (DB errors, etc.) leaking to API clients.
     #[darling(default)]
     mask: bool,
+
+    /// Log level to use when `mask` is set. One of "error" (default), "warn", "info", "debug".
+    /// Ignored when `mask` is not set.
+    #[darling(default)]
+    log: Option<String>,
 }
 
 // ── Code generation ───────────────────────────────────────────────────────────
@@ -116,15 +128,29 @@ fn build_match_arm(variant: &ProblemVariant, enum_ident: &syn::Ident) -> proc_ma
     let (pattern, display_expr) = build_pattern(enum_ident, variant);
 
     if mask {
-        // Masked: log the full error, return generic message to client
+        // Masked: log the full error at the specified level, return generic message to client.
+        // Generate the complete tracing call as a statement so interpolation works correctly.
+        let log_stmt = match variant.log.as_deref().unwrap_or("error") {
+            "warn"  => quote! {
+                ::tracing::warn!(error = %#display_expr, status = #status,
+                    "masked error — full detail suppressed in HTTP response");
+            },
+            "info"  => quote! {
+                ::tracing::info!(error = %#display_expr, status = #status,
+                    "masked error — full detail suppressed in HTTP response");
+            },
+            "debug" => quote! {
+                ::tracing::debug!(error = %#display_expr, status = #status,
+                    "masked error — full detail suppressed in HTTP response");
+            },
+            _ => quote! {
+                ::tracing::error!(error = %#display_expr, status = #status,
+                    "masked error — full detail suppressed in HTTP response");
+            },
+        };
         quote! {
             #pattern => {
-                // Log the full error so it appears in tracing spans / log aggregators
-                ::tracing::error!(
-                    error = %#display_expr,
-                    status = #status,
-                    "masked error — full detail suppressed in HTTP response"
-                );
+                #log_stmt
                 let problem = ::axum_problem::Problem::new(#status)
                     .title(#title_expr);
                 ::axum::response::IntoResponse::into_response(problem)
