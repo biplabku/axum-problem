@@ -2,7 +2,7 @@
 name = "axum-problem"
 description = "RFC 9457 problem details for axum — #[derive(AxumProblem)] converts your error enums to structured HTTP error responses"
 keywords = ["axum", "error", "rfc9457", "problem-details", "derive"]
-categories = ["web-programming", "rust-patterns"]
+categories = ["web-programming", "api-bindings"]
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
