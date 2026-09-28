@@ -1,0 +1,23 @@
+axum-problem/Cargo.toml
+  s_42bd59ebdf91fb::t_e926dd6f166097 15
+CHANGELOG.md
+  s_42bd59ebdf91fb::t_aa630ca1662df3 8
+Cargo.toml
+  s_42bd59ebdf91fb::t_828d56877274e5 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "cf16df41cb8118dafc8b207784e376fad5de23db",
+  "prompts": {},
+  "sessions": {
+    "s_42bd59ebdf91fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "98a71a5a-0f40-479b-a3f5-a4dd65dce633",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Biplab Das <dasbiplabtu@gmail.com>"
+    }
+  }
+}
