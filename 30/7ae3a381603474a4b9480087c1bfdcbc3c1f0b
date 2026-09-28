@@ -1,0 +1,67 @@
+axum-problem-derive/tests/compile_tests.rs
+  s_42bd59ebdf91fb::t_d27cfbdab9e207 1-13
+axum-problem/examples/basic.rs
+  s_42bd59ebdf91fb::t_21594a2de1d280 1-60
+.github/workflows/ci.yml
+  s_42bd59ebdf91fb::t_82fcffff2b143d 1-45
+axum-problem-derive/tests/ui/fail_missing_status.rs
+  s_42bd59ebdf91fb::t_28abbf6bd9f56f 1-13
+axum-problem/Cargo.toml
+  s_42bd59ebdf91fb::t_6e952e39833ded 12
+  s_42bd59ebdf91fb::t_7b593cd39d5adb 6
+  s_42bd59ebdf91fb::t_62142d4045909e 35-37
+axum-problem/examples/custom_status_codes.rs
+  s_42bd59ebdf91fb::t_7779704af1b707 1-68
+axum-problem/tests/adversarial.rs
+  s_42bd59ebdf91fb::t_e1a8fef9681812 236
+Cargo.toml
+  s_42bd59ebdf91fb::t_811b52a8303263 11
+README.md
+  s_42bd59ebdf91fb::t_ae650d6435a681 112-113,118-119,135-143,178-185,192,203-289,295,325-334
+  s_42bd59ebdf91fb::t_8a326a7bcbb32d 79-109
+  s_42bd59ebdf91fb::t_17d11c330146c2 5
+  s_42bd59ebdf91fb::t_fdfa50e155eef9 6
+axum-problem-derive/tests/ui/pass_basic_enum.rs
+  s_42bd59ebdf91fb::t_dc24f9c6a8ed12 1-15
+axum-problem-derive/Cargo.toml
+  s_42bd59ebdf91fb::t_f948ae075056e5 23-25,28-29
+  s_42bd59ebdf91fb::t_51eed33152e4a2 26-27
+  s_42bd59ebdf91fb::t_fd71c9af4d7be6 6
+  s_42bd59ebdf91fb::t_52fe90691bcc2e 12,22,30-31
+axum-problem-derive/README.md
+  s_42bd59ebdf91fb::t_eb72bfa53e0266 1-12
+axum-problem-derive/tests/ui/fail_on_struct.rs
+  s_42bd59ebdf91fb::t_a7571f33a5fd2f 1-10
+axum-problem/tests/stress_and_edge.rs
+  s_42bd59ebdf91fb::t_6f296f8d353086 85-93
+  s_42bd59ebdf91fb::t_79546431272d61 63
+  s_42bd59ebdf91fb::t_fe306b8d4f0be8 206
+  s_42bd59ebdf91fb::t_ca2f7a6480b29c 84
+CHANGELOG.md
+  s_42bd59ebdf91fb::t_34917ea066916e 17-24,29-42
+  s_42bd59ebdf91fb::t_6068537c3b7531 1-16,25-28,43-111
+LICENSE-APACHE
+  s_42bd59ebdf91fb::t_4bcf22fcaefbfe 1-190
+LICENSE-MIT
+  s_42bd59ebdf91fb::t_e738ef5bedbbb4 1-21
+axum-problem-derive/tests/ui/fail_missing_status.stderr
+  s_42bd59ebdf91fb::t_7df8b5f6dffb4e 1-7
+axum-problem-derive/tests/ui/fail_on_struct.stderr
+  s_42bd59ebdf91fb::t_52552d0535e38a 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "307ae3a381603474a4b9480087c1bfdcbc3c1f0b",
+  "prompts": {},
+  "sessions": {
+    "s_42bd59ebdf91fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "98a71a5a-0f40-479b-a3f5-a4dd65dce633",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Biplab Das <dasbiplabtu@gmail.com>"
+    }
+  }
+}
