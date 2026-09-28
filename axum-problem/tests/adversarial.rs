@@ -233,7 +233,7 @@ async fn implements_multiple_traits_simultaneously() {
     let e = MultiTraitError::BadRequest { reason: "test".into() };
     let cloned = e.clone();
     assert_eq!(e, cloned);
-    let display = format!("{}", e);
+    let display = format!("{e}");
     assert_eq!(display, "bad request: test");
     let resp = e.into_response();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);

@@ -3,11 +3,13 @@ name = "axum-problem-derive"
 description = "Derive macro for axum-problem — #[derive(AxumProblem)] for RFC 9457 error responses"
 keywords = ["axum", "error", "http", "rfc9457", "problem-details"]
 categories = ["web-programming", "rust-patterns"]
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/axum-problem-derive"
 
 [lib]
 proc-macro = true
@@ -17,3 +19,13 @@ syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 darling = "0.20"
+
+[dev-dependencies]
+trybuild = "1"
+axum-problem = { path = "../axum-problem" }
+axum = { version = "0.7", default-features = false }
+tracing = "0.1"
+thiserror = "2"
+
+[package.metadata.docs.rs]
+all-features = true

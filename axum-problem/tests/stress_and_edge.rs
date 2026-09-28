@@ -60,7 +60,7 @@ async fn unicode_chinese_in_detail() {
     let json = body_json(resp).await;
     let detail = json["detail"].as_str().unwrap();
     assert!(detail.contains("42"), "ID must be in Chinese error message");
-    assert!(detail.len() > 0);
+    assert!(!detail.is_empty());
 }
 
 #[tokio::test]
@@ -79,6 +79,16 @@ async fn backslash_in_error_is_valid_json() {
     // Most important: the body is valid JSON (backslash properly escaped)
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&raw);
     assert!(parsed.is_ok(), "backslash in error must produce valid JSON, got: {raw}");
+}
+
+#[tokio::test]
+async fn quote_in_message_is_valid_json() {
+    let resp = UnicodeError::QuoteInMessage.into_response();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let raw = body_str(resp).await;
+    // Most important: the body is valid JSON (quote/apostrophe properly escaped)
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(&raw);
+    assert!(parsed.is_ok(), "quote in error must produce valid JSON, got: {raw}");
 }
 
 #[tokio::test]
@@ -193,7 +203,7 @@ async fn ten_thousand_concurrent_into_response() {
         // Every response must be valid and consistent
         assert_eq!(json["status"].as_u64().unwrap() as u16, status,
             "JSON status must match HTTP status under concurrent load");
-        assert_eq!(json["title"].as_str().unwrap_or("").len() > 0, true,
+        assert!(!json["title"].as_str().unwrap_or("").is_empty(),
             "title must exist under concurrent load");
 
         match status {

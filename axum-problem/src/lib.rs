@@ -242,8 +242,6 @@ mod utoipa_impl {
     use utoipa::openapi::{
         ObjectBuilder, RefOr, Schema,
         schema::{SchemaType, SchemaFormat, KnownFormat, AdditionalProperties},
-        response::ResponseBuilder,
-        content::ContentBuilder,
     };
 
     impl<'__s> utoipa::ToSchema<'__s> for Problem {

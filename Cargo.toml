@@ -8,3 +8,4 @@ edition = "2021"
 authors = ["Biplab Das <dasbiplabtu@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/biplabku/axum-problem"
+documentation = "https://docs.rs/axum-problem"

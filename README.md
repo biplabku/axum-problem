@@ -2,7 +2,8 @@
 
 [![crates.io](https://img.shields.io/crates/v/axum-problem.svg)](https://crates.io/crates/axum-problem)
 [![docs.rs](https://docs.rs/axum-problem/badge.svg)](https://docs.rs/axum-problem)
-[![MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/biplabku/axum-problem/actions/workflows/ci.yml/badge.svg)](https://github.com/biplabku/axum-problem/actions/workflows/ci.yml)
+[![MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 
 RFC 9457 problem details for axum — `#[derive(AxumProblem)]` converts your error enums to structured HTTP error responses with one attribute.
 
@@ -75,13 +76,47 @@ Content-Type: application/problem+json
 
 ---
 
+## How it maps
+
+```mermaid
+flowchart LR
+    A["Error enum variant<br/>#[error(...)] + #[problem(status = 404)]"] -->|"#[derive(AxumProblem)]"| B["IntoResponse::into_response()"]
+    B --> C["RFC 9457 JSON<br/>application/problem+json"]
+```
+
+Each variant's attributes map directly onto the RFC 9457 response fields:
+
+```rust
+#[error("order {id} not found")]     // ─┐
+#[problem(                           //  │
+    status = 404,                    // ─┼─▶ "status": 404, "title": "Not Found"
+    title = "Order Missing"          // ─┼─▶ overrides the auto title above
+)]                                    //  │
+NotFound { id: i64 },                // ─┘─▶ Display impl becomes "detail"
+```
+
+```json
+{
+  "type": "about:blank",      // set via Problem::problem_type(), omitted otherwise
+  "title": "Order Missing",   // from `title = "..."`, else derived from `status`
+  "status": 404,              // from `status = <u16>`
+  "detail": "order 1001 not found",  // the variant's Display output (omitted if `mask`)
+  "instance": "/orders/1001"  // set via Problem::instance(), omitted otherwise
+}
+```
+
+---
+
 ## Attributes
+
+Apply `#[problem(...)]` to each variant:
 
 | Attribute | Required | Description |
 |---|---|---|
 | `status = <u16>` | Yes | HTTP status code. Title auto-derived from the code. |
 | `title = "<str>"` | No | Override the default title. |
-| `mask` | No | Hides detail from HTTP response; logs it via `tracing::error!`. |
+| `mask` | No | Hides detail from HTTP response; logs it via `tracing` instead. |
+| `log = "<level>"` | No | Only relevant when `mask` is set. Tracing level used to log the masked error: `"error"` (default), `"warn"`, `"info"`, or `"debug"`. |
 
 ### The `mask` attribute — production safety
 
@@ -95,6 +130,15 @@ With `mask`:
 ```
 {"title": "Internal Server Error", "status": 500}   ← clean client response
 ERROR error="connection to 10.0.0.5:5432 refused" status=500  ← in your logs
+```
+
+Combine `mask` with `log` to control the log level for errors that are expected
+to happen occasionally (rate limiting, etc.) instead of always logging at `error`:
+
+```rust
+#[error("rate limited: {0}")]
+#[problem(status = 429, mask, log = "warn")]
+RateLimited(String),
 ```
 
 ---
@@ -131,13 +175,21 @@ pub enum ApiError {
 }
 ```
 
+| Variant style | Example | Detail source |
+|---|---|---|
+| Unit | `Unauthorized` | Enum's `Display` |
+| Struct (named fields) | `NotFound { id: i64 }` | Enum's `Display` |
+| Tuple (1 field) | `Database(String)` | Enum's `Display` |
+| Tuple (multiple fields) | `RateLimit(u32, u32)` | Enum's `Display` |
+| Any + `mask` | `Database(String)` | Suppressed; logged via `tracing` |
+
 All variants use the enum's `Display` implementation — so thiserror's `#[error("...")]` templates apply correctly.
 
 ---
 
 ## Manual construction
 
-For one-off errors:
+For one-off errors where a full enum is overkill:
 
 ```rust
 use axum_problem::Problem;
@@ -148,14 +200,99 @@ Problem::not_found()
 ```
 
 Convenience constructors: `bad_request()`, `unauthorized()`, `forbidden()`,
-`not_found()`, `conflict()`, `unprocessable_entity()`, `too_many_requests()`,
-`internal_server_error()`, `service_unavailable()`.
+`not_found()`, `method_not_allowed()`, `conflict()`, `unprocessable_entity()`,
+`too_many_requests()`, `internal_server_error()`, `not_implemented()`,
+`service_unavailable()`.
+
+### RFC 9457 extension members
+
+Add arbitrary top-level fields alongside the standard ones:
+
+```rust
+use serde_json::json;
+
+Problem::new(422)
+    .detail("Validation failed")
+    .extension("violations", json!([
+        {"field": "email", "message": "must be a valid email address"},
+        {"field": "age",   "message": "must be at least 18"},
+    ]))
+    .extension("request_id", json!("req-abc-123"))
+```
+
+Produces:
+```json
+{
+  "title": "Unprocessable Entity",
+  "status": 422,
+  "detail": "Validation failed",
+  "violations": [...],
+  "request_id": "req-abc-123"
+}
+```
+
+Extension fields are serialized flat at the top level — not nested under an
+`"extensions"` key — as RFC 9457 §3.5 requires.
+
+---
+
+## ProblemLayer — catch axum's own errors
+
+axum's built-in extractors (bad JSON body, wrong Content-Type, missing fields)
+return plain text errors, not `application/problem+json`. `ProblemLayer` fixes
+this by intercepting any 4xx/5xx response that isn't already a problem response:
+
+```rust
+use axum::Router;
+use axum_problem::ProblemLayer;
+
+let app = Router::new()
+    /* ... your routes ... */
+    .layer(ProblemLayer);
+```
+
+Now every error — including axum extractor failures — returns structured
+`application/problem+json`. Responses already in problem+json format pass
+through unchanged (extension fields preserved). Apply `ProblemLayer` **last**
+(outermost layer) so it catches errors from all other middleware and extractors.
+
+---
+
+## utoipa / OpenAPI integration
+
+Enable the `utoipa` feature to expose `Problem` in your OpenAPI spec:
+
+```toml
+[dependencies]
+axum-problem = { version = "0.1", features = ["utoipa"] }
+utoipa = "4"
+```
+
+`Problem` implements `ToSchema` — use it directly in `#[utoipa::path]` responses:
+
+```rust
+#[utoipa::path(
+    get, path = "/orders/{id}",
+    responses(
+        (status = 200, body = Order),
+        (status = 404, body = Problem, description = "Order not found"),
+        (status = 422, body = Problem, description = "Validation failed"),
+        (status = 500, body = Problem, description = "Internal error"),
+    )
+)]
+async fn get_order(Path(id): Path<i64>) -> Result<Json<Order>, ApiError> {
+    // ...
+}
+```
+
+The generated schema includes all RFC 9457 standard fields plus
+`additionalProperties: true` to represent extension members.
 
 ---
 
 ## Works without thiserror
 
-`AxumProblem` only requires `Display`:
+`AxumProblem` only requires `Display` — you can use it with any error type:
 
 ```rust
 #[derive(Debug, AxumProblem)]
@@ -185,7 +322,16 @@ impl std::error::Error for MyError {}
 
 ## Testing
 
-59 tests covering unit, derive macro (all variant styles), adversarial (Unicode, long strings, 10k concurrent requests), RFC 9457 compliance, and security (masking field values, chained error sources).
+77 unit and integration tests (plus doc-tests) covering the derive macro (all
+variant styles), `ProblemLayer`, adversarial inputs (Unicode, long strings,
+10k concurrent requests), RFC 9457 compliance, and security (masking field
+values, chained error sources).
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ---
 

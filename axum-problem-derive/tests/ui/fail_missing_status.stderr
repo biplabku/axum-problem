@@ -1,0 +1,7 @@
+error: Missing field `status`
+ --> tests/ui/fail_missing_status.rs:7:24
+  |
+7 | #[derive(Debug, Error, AxumProblem)]
+  |                        ^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `AxumProblem` (in Nightly builds, run with -Z macro-backtrace for more info)
